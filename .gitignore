@@ -1,0 +1,59 @@
+# Java/Android/IntelliJ standard
+
+# Gradle files
+.gradle/
+**/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Local configuration files
+local.properties
+
+# IntelliJ IDEA files
+.idea/
+*.iml
+
+# Build and generated files
+build/
+**/build/generated/
+captures/
+outputs/
+gen/
+bin/
+tmp/
+intermediates/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+
+# Misc
+*.swp
+*.swo
+
+# Ignore APKs and output artifacts
+*.apk
+*.ap_
+
+# Ignore keystore files
+*.jks
+*.keystore
+out/
+
+# JNI Libraries
+app/src/main/jniLibs/
+
+# Ignore node_modules for hybrid projects
+node_modules/
+local.properties
+*.hprof
+
+# Unused GenericCot database classes (kept locally for reference)
+app/src/main/java/com/atakmap/android/LoRaBridge/Database/GenericCotDao.java
+app/src/main/java/com/atakmap/android/LoRaBridge/Database/GenericCotEntity.java
+app/src/main/java/com/atakmap/android/LoRaBridge/Database/GenericCotRepository.java
+app/src/main/java/com/atakmap/android/LoRaBridge/CotXml/CotXmlUtils.java
+app/src/main/java/com/atakmap/android/LoRaBridge/GenericMessage/ExiUtils.java
+app/src/main/java/com/atakmap/android/LoRaBridge/GenericMessage/GenericCotFactory.java
