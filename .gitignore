@@ -57,3 +57,4 @@ app/src/main/java/com/atakmap/android/LoRaBridge/Database/GenericCotRepository.j
 app/src/main/java/com/atakmap/android/LoRaBridge/CotXml/CotXmlUtils.java
 app/src/main/java/com/atakmap/android/LoRaBridge/GenericMessage/ExiUtils.java
 app/src/main/java/com/atakmap/android/LoRaBridge/GenericMessage/GenericCotFactory.java
+Documentation/seemoo-thesis-template/
