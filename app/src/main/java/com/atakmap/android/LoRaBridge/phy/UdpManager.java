@@ -6,7 +6,6 @@ import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
-import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
@@ -23,6 +22,7 @@ import java.util.concurrent.TimeUnit;
  *   - Maintain a single RX port and single TX socket
  *   - Dispatch inbound packets to handlers based on message header:
  *       Chat messages      -> "SDR_CHAT|"
+ *       Chat fragments     -> "SDR_CHATF|"
  *       CoT messages       -> "SDR_COT|"
  *       CoT fragments      -> "SDR_COTF|"
  *   - Provide async send API for chat and CoT messages
@@ -39,8 +39,11 @@ public class UdpManager {
     /** Functional interface for handlers receiving raw byte payloads */
     public interface ByteHandler { void accept(byte[] data); }
 
-    /** Chat packet header prefix */
+    /** Chat packet header prefix (complete message) */
     public static final String HDR_CHAT = "SDR_CHAT|";
+
+    /** Chat fragment header prefix */
+    public static final String HDR_CHAT_FRAG = "SDR_CHATF|";
 
     /** CoT packet header prefix (complete message) */
     public static final String HDR_COT = "SDR_COT|";
@@ -99,11 +102,21 @@ public class UdpManager {
 
     private UdpManager() {}
 
-    /** Register chat handler */
-    public void setChatHandler(ByteHandler handler) { this.chatHandler = handler; }
+    /**
+     * Register chat handler.
+     * This handler processes both complete messages (SDR_CHAT|) and fragments (SDR_CHATF|).
+     */
+    public void setChatHandler(ByteHandler handler) {
+        this.chatHandler = handler;
+    }
 
-    /** Register CoT handler (handles both complete and fragment messages) */
-    public void setCotHandler(ByteHandler handler) { this.cotHandler = handler; }
+    /**
+     * Register CoT handler.
+     * This handler processes both complete messages (SDR_COT|) and fragments (SDR_COTF|).
+     */
+    public void setCotHandler(ByteHandler handler) {
+        this.cotHandler = handler;
+    }
 
     // =========================================================================
     // Lifecycle
@@ -168,10 +181,20 @@ public class UdpManager {
 
     /**
      * Send chat payload with SDR_CHAT header.
+     * For legacy single-packet messages.
      */
     public void sendChat(byte[] body) {
         if (body == null) return;
         byte[] payload = withHeader(HDR_CHAT, body);
+        sendAsync(payload);
+    }
+
+    /**
+     * Send chat payload as-is (already includes SDR_CHAT or SDR_CHATF header).
+     * Used for fragmented messages where the converter has already added the header.
+     */
+    public void sendChatRaw(byte[] payload) {
+        if (payload == null) return;
         sendAsync(payload);
     }
 
@@ -225,6 +248,7 @@ public class UdpManager {
 
     /**
      * Routes each payload by checking header prefix.
+     * Supports both complete messages and fragments for both chat and CoT.
      */
     private void route(byte[] data) {
         try {
@@ -261,13 +285,28 @@ public class UdpManager {
                 return;
             }
 
-            // Chat message
+            // Complete chat message
             if (prefix.startsWith(HDR_CHAT)) {
                 Log.d(TAG, "route: detected SDR_CHAT message");
                 if (chatHandler != null) {
-                    chatHandler.accept(stripHeader(data, HDR_CHAT.length()));
+                    // Pass complete payload including header
+                    // ChatFragmentConverter needs the header to distinguish message types
+                    chatHandler.accept(data);
                 } else {
                     Log.w(TAG, "Chat payload but chatHandler == null, drop");
+                }
+                return;
+            }
+
+            // Fragmented chat message
+            if (prefix.startsWith(HDR_CHAT_FRAG)) {
+                Log.d(TAG, "route: detected SDR_CHATF fragment");
+                if (chatHandler != null) {
+                    // For fragments, pass the entire payload including header
+                    // The ChatFragmentConverter needs the header to distinguish fragment vs complete
+                    chatHandler.accept(data);
+                } else {
+                    Log.w(TAG, "Chat fragment but chatHandler == null, drop");
                 }
                 return;
             }

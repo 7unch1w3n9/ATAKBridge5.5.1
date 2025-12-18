@@ -22,7 +22,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
  */
 @Database(
         entities = {ChatMessageEntity.class},
-        version = 10,
+        version = 11,
         exportSchema = false
 )
 public abstract class ChatDatabase extends RoomDatabase {
