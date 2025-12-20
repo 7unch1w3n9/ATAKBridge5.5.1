@@ -5,11 +5,10 @@ import com.atakmap.coremap.log.Log;
 import android.hardware.usb.UsbDeviceConnection;
 import android.os.ParcelFileDescriptor;
 
-import java.io.IOException;
 import java.util.concurrent.*;
 
 public final class FlowgraphEngine {
-    private  static final String TAG = "FlowgraphEngine";
+    private static final String TAG = "FlowgraphEngine";
     private static final FlowgraphEngine I = new FlowgraphEngine();
     public static FlowgraphEngine get() { return I; }
 
@@ -19,25 +18,24 @@ public final class FlowgraphEngine {
         t.setDaemon(true);
         return t;
     });
+
     private Future<?> task;
     private enum State { STOPPED, STARTING, RUNNING, STOPPING }
     private volatile State state = State.STOPPED;
     private UsbDeviceConnection heldConn;
+    private volatile CountDownLatch terminated;
 
     public boolean isBusy() {
         synchronized (lock) {
             return state == State.STARTING || state == State.RUNNING || state == State.STOPPING;
         }
     }
-    private volatile CountDownLatch runningGate = new CountDownLatch(0);
-    private volatile CountDownLatch terminated = new CountDownLatch(0);
-
 
     public void startWithConnection(UsbDeviceConnection conn) {
         synchronized (lock) {
             if (isBusy()) {
                 Log.w(TAG, "start ignored: state=" + state);
-                if (conn != null) conn.close();  // 立即释放
+                if (conn != null) conn.close();
                 return;
             }
             heldConn = conn;
@@ -46,7 +44,6 @@ public final class FlowgraphEngine {
             final int rawFd = safeFd(conn);
             Log.i(TAG, "start enter fd=" + rawFd);
 
-            runningGate = new CountDownLatch(1);
             terminated = new CountDownLatch(1);
 
             task = exec.submit(() -> {
@@ -54,25 +51,58 @@ public final class FlowgraphEngine {
                 ParcelFileDescriptor pfd = null;
 
                 try {
-                    synchronized (lock) { state = State.RUNNING; }
+                    synchronized (lock) {
+                        state = State.RUNNING;
+                    }
 
+                    // Duplicate file descriptor
                     pfd = ParcelFileDescriptor.fromFd(rawFd);
                     fdForNative = pfd.getFd();
 
+                    // Close original connection immediately after duplication
+                    if (conn != null) {
+                        conn.close();
+                        heldConn = null;
+                        Log.i(TAG, "Closed original USB connection after FD duplication");
+                    }
+
+                    // This call blocks until flowgraph terminates
                     Log.i(TAG, "run_flowgraph_with_fd(" + fdForNative + ") begin");
                     int rc = FlowgraphNative.run_flowgraph_with_fd(fdForNative);
                     Log.i(TAG, "run_flowgraph_with_fd exit rc=" + rc);
 
                 } catch (Throwable t) {
-                    Log.e("FlowgraphEngine", "flowgraph thread crashed", t);
-                } if (conn != null) {
-                    conn.close();
-                    Log.i("FlowgraphEngine", "closed UsbDeviceConnection immediately after dup FD");
+                    Log.e(TAG, "Flowgraph thread crashed", t);
+                } finally {
+                    // Close duplicated file descriptor
+                    if (pfd != null) {
+                        try {
+                            pfd.close();
+                            Log.i(TAG, "Closed duplicated file descriptor");
+                        } catch (Exception e) {
+                            Log.e(TAG, "Error closing ParcelFileDescriptor", e);
+                        }
+                    }
+
+                    // Close USB connection if still held
+                    if (heldConn != null) {
+                        try {
+                            heldConn.close();
+                            Log.i(TAG, "Closed USB connection in finally block");
+                        } catch (Exception e) {
+                            Log.e(TAG, "Error closing USB connection", e);
+                        }
+                        heldConn = null;
+                    }
+
+                    // Signal termination
+                    terminated.countDown();
+                    Log.i(TAG, "Flowgraph thread terminated, latch released");
                 }
-                heldConn = null;
             });
         }
     }
+
     public void stop() {
         Log.i(TAG, "stop() called, state=" + state);
 
@@ -83,20 +113,25 @@ public final class FlowgraphEngine {
             }
             state = State.STOPPING;
         }
+
         try {
+            // Request native flowgraph shutdown
             Log.i(TAG, "Calling FlowgraphNative.shutdown()");
             FlowgraphNative.shutdown();
+            Log.i(TAG, "FlowgraphNative.shutdown() returned");
 
-            CountDownLatch gate = runningGate;
-            if (gate != null) gate.countDown();
-
+            // Wait for thread to terminate
             CountDownLatch done = terminated;
             if (done != null) {
-                Log.i(TAG, "Waiting for flowgraph to terminate...");
-                boolean finished = done.await(2000, TimeUnit.MILLISECONDS);
-                if (!finished) {
-                    Log.w(TAG, "Flowgraph termination timeout");
+                Log.i(TAG, "Waiting for flowgraph thread to terminate...");
+                boolean finished = done.await(5, TimeUnit.SECONDS);
+                if (finished) {
+                    Log.i(TAG, "Flowgraph thread terminated successfully");
+                } else {
+                    Log.w(TAG, "Flowgraph termination timeout after 5 seconds");
                 }
+            } else {
+                Log.w(TAG, "Termination latch is null");
             }
 
         } catch (InterruptedException e) {
@@ -110,7 +145,9 @@ public final class FlowgraphEngine {
                 state = State.STOPPED;
             }
 
+            // Cancel task if still running
             if (f != null && !f.isDone()) {
+                Log.w(TAG, "Cancelling flowgraph task");
                 f.cancel(true);
             }
 
@@ -118,23 +155,12 @@ public final class FlowgraphEngine {
         }
     }
 
-
-    private void closeConnQuietly(long ms) {
-        final UsbDeviceConnection c = heldConn;
-        heldConn = null;
-        if (c == null) return;
-        exec.submit(() -> {
-            int fdSnapshot = -1;
-            try { fdSnapshot = c.getFileDescriptor(); } catch (Throwable ignore) {}
-            try {
-                Log.i("FlowgraphEngine", "close UsbDeviceConnection (delayed) fd=" + fdSnapshot);
-                c.close();
-            } catch (Throwable ignore) {}
-        });
-    }
-
     private static int safeFd(UsbDeviceConnection c) {
         if (c == null) return -1;
-        try { return c.getFileDescriptor(); } catch (Throwable t) { return -2; }
+        try {
+            return c.getFileDescriptor();
+        } catch (Throwable t) {
+            return -2;
+        }
     }
 }
